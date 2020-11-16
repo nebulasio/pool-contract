@@ -272,7 +272,7 @@ class BaseContract {
 
     setConfig(config) {
         this._verifyFromMultiSig()
-        this.verifyAddress(config.multiSig)
+        this._verifyAddress(config.multiSig)
         this._config = config
     }
 
@@ -373,7 +373,7 @@ class Pool extends BaseContract {
             lpToken: _lpToken,
             allocPoint: _allocPoint,
             lastRewardBlock: lastRewardBlock,
-            accPerShare: 0
+            accPerShare: '0'
         })
     }
 
@@ -410,22 +410,20 @@ class Pool extends BaseContract {
 
         let height = Blockchain.block.height
         if (height > pool.lastRewardBlock && new BigNumber(lpSupply).gt(0)) {
+            let state = Blockchain.getAccountState(this.config.poolProxy)
 
+            let balance = this._totalBalance || '0'
+            let pendingToken = new BigNumber(state.balance).sub(balance)
+            let reward = pendingToken.times(pool.allocPoint).div(this._totalAllocPoint).toFixed(0, BigNumber.ROUND_DOWN)
+            accPerShare =  new BigNumber(accPerShare).add(reward.times(AccumulatedMultiple).div(lpSupply));
         }
-        return new BigNumber(user.amount).times().div(AccumulatedMultiple)
+        return new BigNumber(user.amount).times(accPerShare).div(AccumulatedMultiple).sub(user.rewardDebt).toFixed(0, BigNumber.ROUND_DOWN)
     }
 
-    distributePoolBalance(_amount) {
+    updatePoolBalance() {
         this._verifyFromProxy()
-        this._distributePoolBalance(_amount)
-    }
-
-    _distributePoolBalance(_amount) {
         let state = Blockchain.getAccountState(this.config.poolProxy)
-        if (new BigNumber(state.balance).lt(_amount)) {
-            throw new Error('distribute: insufficient balance')
-        }
-        this._totalBalance = new BigNumber(state.balance).sub(_amount).toString(10)
+        this._totalBalance = state.balance
     }
 
     // Update reward vairables for all pools.
@@ -447,8 +445,10 @@ class Pool extends BaseContract {
         if (Blockchain.block.height <= pool.lastRewardBlock) {
             return
         }
-        let lpSupply = this._balanceOf(pool.lpToken, Blockchain.transaction.to)
-        if (new BigNumber(lpSupply).gt(0)) {
+        let lpSupply = this._balanceOf(pool.lpToken, this.config.poolProxy)
+        if (new BigNumber(lpSupply).gt(0) && new BigNumber(_pendingToken).gt(0)) {
+            let reward = new BigNumber(_pendingToken).times(pool.allocPoint).div(this._totalAllocPoint).toFixed(0, BigNumber.ROUND_DOWN)
+            pool.accPerShare = new BigNumber(pool.accPerShare).add(new BigNumber(reward).times(AccumulatedMultiple).div(lpSupply)).toFixed(0, BigNumber.ROUND_DOWN)
         }
         pool.lastRewardBlock = Blockchain.block.height
         this._poolInfo.setData(_pid, pool)
@@ -458,12 +458,14 @@ class Pool extends BaseContract {
     deposit(_from, _pid, _amount) {
         this._verifyFromProxy()
 
+        this.massUpdatePools()
+
         let pool = this._verifyPool(_pid)
         let from = _from
         let ukey = this._poolUserKey(_pid, from)
         let user = this._userInfo.getData(ukey) || { amount: '0'}
-        user.amount = new BigNumber(user.amount).add(_amount)
-        user.rewardDebt = '0'
+        user.amount = new BigNumber(user.amount).add(_amount).toFixed(0, BigNumber.ROUND_DOWN)
+        user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).div(AccumulatedMultiple).toFixed(0, BigNumber.ROUND_DOWN)
         this._userInfo.setData(ukey, user)
         return pool
     }
@@ -471,20 +473,30 @@ class Pool extends BaseContract {
     claim(_from, _pid) {
         this._verifyFromProxy()
 
-        this._verifyPool(_pid)
-        let from = _from
-        let reward = this._handleReward(from, _pid)
-        this._totalBalance = 
+        this.massUpdatePools()
+
+        let pool = this._verifyPool(_pid)
+        let ukey = this._poolUserKey(_pid, _from)
+        let user = this._userInfo.getData(ukey)
+        if (!user) {
+            throw new Error('user not found')
+        }
+        let reward = this._handleReward(pool, user)
+        user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).div(AccumulatedMultiple).toFixed(0, BigNumber.ROUND_DOWN)
+        this._userInfo.setData(ukey, user)
         return reward
     }
 
-    _handleReward(_from, _pid) {
-
+    _handleReward(_pool, _user) {
+        let pending = new BigNumber(_user.amount).times(_pool.accPerShare).div(AccumulatedMultiple).sub(_user.rewardDebt).toFixed(0, BigNumber.ROUND_DOWN)
+        return pending
     }
 
      // Withdraw LP tokens from pool.
     withdraw(_from, _pid, _amount) {
         this._verifyFromProxy()
+
+        this.massUpdatePools()
 
         let from = _from
         let pool = this._verifyPool(_pid)
@@ -497,10 +509,10 @@ class Pool extends BaseContract {
             throw new Error('withdraw: insufficient balance')
         }
 
-        let reward = this._handleReward(from, _pid)
+        let reward = this._handleReward(pool, user)
 
         user.amount = new BigNumber(user.amount).sub(_amount)
-        user.rewardDebt = 0
+        user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).toFixed(0, BigNumber.ROUND_DOWN)
         this._userInfo.setData(ukey, user)
 
         return {lpToken: pool.lpToken, reward: reward}

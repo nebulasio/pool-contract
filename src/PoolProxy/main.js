@@ -50,7 +50,7 @@ class BaseContract {
 
     setConfig(config) {
         this._verifyFromMultiSig()
-        this.verifyAddress(config.multiSig)
+        this._verifyAddress(config.multiSig)
         this._config = config
     }
 
@@ -128,15 +128,19 @@ class PoolProxy extends BaseContract {
         })
     }
 
+    pendingToken(_pid, _user) {
+        return this.poolContract.call('pendingToken', _pid, _user)
+    }
+
     deposit(_pid, _amount) {
         let from = Blockchain.transaction.from
         let pool = this.poolContract.call('deposit', from, _pid, _amount)
-        new Blockchain.Contract(pool.lpToken).call('transferFrom', from, Blockchain.transaction.to, amount)
+        new Blockchain.Contract(pool.lpToken).call('transferFrom', from, Blockchain.transaction.to, _amount)
         this._depositEvent(true, from, _pid, _amount)
     }
 
     _depositEvent(_status, _from, _pid, _value) {
-        Event.Trigger({
+        Event.Trigger('Pool', {
             Status: _status,
             Deposit: {
                 from: _from,
@@ -147,14 +151,21 @@ class PoolProxy extends BaseContract {
     }
 
     claim(_pid) {
-        let reward = this.poolContract.call('claim', Blockchain.transaction.from, _pid)
+        let from = Blockchain.transaction.from
+        let reward = this.poolContract.call('claim', from, _pid)
         this._transferReward(reward)
 
-        Event.Trigger({Stateus: true, Claim: {from: from, poolId: _pid}})
+        this.poolContract.call('updatePoolBalance')
+
+        Event.Trigger('Pool', {Stateus: true, Claim: {from: from, poolId: _pid}})
     }
 
     _transferReward(reward) {
-        Utils.transferNAS(Blockchain.transaction.from, reward)
+        console.log('transfer reward:', reward)
+        if (new BigNumber(reward).gt(0)) {
+            Utils.transferNAS(Blockchain.transaction.from, reward)
+        }
+        this.poolContract.call('updatePoolBalance')
     }
 
     withdraw(_pid, _amount) {
@@ -167,7 +178,7 @@ class PoolProxy extends BaseContract {
     }
 
     _withdrawEvent(_status, _from, _to, _value) {
-        Event.Trigger({
+        Event.Trigger('Pool', {
             Status: _status,
             Withdraw: {
                 from: _from,

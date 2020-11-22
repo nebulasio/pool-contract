@@ -8,6 +8,7 @@ const Event = neblocal.Event
 /** Local simulation environment code; End. */
 
 const AccumulatedMultiple = new BigNumber(10).pow(12).toString(10)
+const USDTDecimals = 6
 
 class PageData {
 
@@ -406,6 +407,9 @@ class Pool extends BaseContract {
 
         let accPerShare = pool.accPerShare
         let user = this._userInfo.getData(this._poolUserKey(_pid, _user))
+        if (!user) {
+            return '0'
+        }
         let lpSupply = this._balanceOf(pool.lpToken, Blockchain.transaction.to)
 
         let height = Blockchain.block.height
@@ -418,6 +422,98 @@ class Pool extends BaseContract {
             accPerShare =  new BigNumber(accPerShare).add(reward.times(AccumulatedMultiple).div(lpSupply));
         }
         return new BigNumber(user.amount).times(accPerShare).div(AccumulatedMultiple).sub(user.rewardDebt).toFixed(0, BigNumber.ROUND_DOWN)
+    }
+
+    getAPY(_pid) {
+        let pool = this._verifyPool(_pid)
+
+        let poolValue = this.getPoolValue(_pid)
+        if (new BigNumber(poolValue).gt(0)) {
+            // rewad nas value
+            let state = Blockchain.getAccountState(this.config.poolProxy)
+            let reward = new BigNumber(state.balance).sub(this._totalBalance)
+            let nasPrice = this._getPrice(this.config.wnas)
+            reward = reward.times(nasPrice).div(new BigNumber(10).pow(18))
+
+            let duration = Blockchain.block.height - pool.lastRewardBlock
+            let apy = new BigNumber(reward).times(365*24*60*60).div(duration*15).div(poolValue)
+            return apy.toFixed(0, BigNumber.ROUND_DOWN)
+        }
+
+        return '0'
+    }
+
+    getPoolValue(_pid) {
+        let pool = this._verifyPool(_pid)
+        let lpBalance = this._balanceOf(pool.lpToken, this.config.poolProxy)
+        let totalSupply = new Blockchain.Contract(pool.lpToken).call('totalSupply')
+        if (new BigNumber(totalSupply).gt(0) && new BigNumber(lpBalance).gt(0)) {
+            let pair = this._getPoolPair(pool)
+
+            let token0Decimals = new Blockchain.Contract(pair.token0).call('decimals')
+            let token1Decimals = new Blockchain.Contract(pair.token1).call('decimals')
+
+            let token0Price = this._getPrice(pair.token0)
+            let token1Price = this._getPrice(pair.token1)
+
+            let poolValue = new BigNumber(token0Price).times(pair.reserve0).div(token0Decimals)
+            poolValue = new BigNumber(token1Price).times(pair.reserve1).div(token1Decimals).add(poolValue)
+            return poolValue.toFixed(0, BigNumber.ROUND_DOWN)
+        } else {
+            return '0'
+        }
+
+    }
+
+    _getPoolPair(pool) {
+        // get pairs
+        if (!this._pairCaches) {
+            let allPairs = new Blockchain.Contract(this.config.swap).call('allPairs')
+            let pairs = {}
+            for (let pairName of allPairs) {
+                let names = pairName.split('/')
+                pair = new Blockchain.Contract(this.config.swap).call('getPair', names[0], names[1])
+                pairs[pairName] = pair
+            }
+            this._pairCaches = pairs
+        }
+        for (let pairName in this._pairCaches) {
+            let pair = this._pairCaches[pairName]
+            if (pair.lp == pool.lpToken) {
+                return pair
+            }
+        }
+        return null
+    }
+
+    // price * 10^6
+    _getPrice(token) {
+        if (token == this.config.usdt) {
+            return '1000000'
+        }
+        if (this._priceCache[token]) {
+            return this._priceCache[token]
+        }
+        let pair = null
+        if (this._pairCaches) {
+            let pairName = token < this.config.usdt ? token + '/' + this.config.usdt : this.config.usdt + '/' + token
+            pair = this._pairCaches[pairName]
+        } else {
+            pair = new Blockchain.Contract(this.config.swap).call('getPair', token, this.config.usdt)
+        }
+        let decimals = new Blockchain.Contract(token).call('decimals')
+        let usdtWei = new BigNumber(10).pow(USDTDecimals)
+        let tokenWei = new BigNumber(10).pow(decimals)
+        
+        if (!this._priceCache) {
+            this._priceCache = {}
+        }
+        if (token == pair.token0) {
+            this._priceCache[token] = usdtWei.times(usdtWei).times(pair.reserve0).div(pair.reserve1).div(tokenWei).toFixed(0, BigNumber.ROUND_DOWN)
+        } else {
+            this._priceCache[token] = usdtWei.times(usdtWei).times(pair.reserve1).div(pair.reserve0).div(tokenWei).toFixed(0, BigNumber.ROUND_DOWN)
+        }
+        return this._priceCache[token]
     }
 
     updatePoolBalance() {
@@ -539,7 +635,11 @@ class Pool extends BaseContract {
     }
 
     getUserPoolInfo(_user, _pid) {
-        return this._userInfo.getData(this._poolUserKey(_pid, _user))
+        let info = this._userInfo.getData(this._poolUserKey(_pid, _user))
+        if (info) {
+            info.pendingToken = this.pendingToken(_pid, _user)
+        }
+        return info
     }
 
     getUserPageIndexes() {

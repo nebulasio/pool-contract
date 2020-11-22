@@ -41,7 +41,9 @@ class PoolTest {
                 'poolProxy': LocalContext.getContractAddress(PoolProxy),
                 'assetManagers': [callerAddr],
                 'dataManagers': [callerAddr],
-
+                'swap': 'n1j7NMiWUJhAAsMiKgmPt21SwNFkpBh3HvY',
+                'usdt': 'n1prbivQy5kwQ3WU9RdzRFPifJwprUrDyTQ',
+                'wnas': 'n1kNCRDjemq5AzRqawmZVcSMfhpsi8s3zTm'
             },
             contractList: {
                 'pool': LocalContext.getContractAddress(Pool),

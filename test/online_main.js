@@ -45,7 +45,9 @@ class PoolTest {
                 'poolProxy': ConfigManager.getOnlineContractAddress(PoolProxy),
                 'assetManagers': [callerAddr],
                 'dataManagers': [callerAddr],
-
+                'swap': 'n1j7NMiWUJhAAsMiKgmPt21SwNFkpBh3HvY',
+                'usdt': 'n1prbivQy5kwQ3WU9RdzRFPifJwprUrDyTQ',
+                'wnas': 'n1kNCRDjemq5AzRqawmZVcSMfhpsi8s3zTm'
             },
             contractList: {
                 'pool': ConfigManager.getOnlineContractAddress(Pool),
@@ -111,12 +113,12 @@ async function main() {
     TestUtils.log('caller', TestKeys.caller.getAddressString())
 
     let test = new PoolTest()
-    // await test.deploy()
-    // await test.setConfig()
+    await test.deploy()
+    await test.setConfig()
     TestUtils.log('config', await MultiSig.getConfigTest())
-    // await test.addPool()
+    await test.addPool()
     // test.setPool()
-    test.deposit('1000000')
+    // test.deposit('1000000')
     // test.claim()
     // test.withdraw(value)
 }

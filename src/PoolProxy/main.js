@@ -132,6 +132,14 @@ class PoolProxy extends BaseContract {
         return this.poolContract.call('pendingToken', _pid, _user)
     }
 
+    getAPY(_pid) {
+        return this.poolContract.call('getAPY', _pid)
+    }
+
+    getPoolValue(_pid) {
+        return this.poolContract.call('getPoolValue', _pid)
+    }
+
     deposit(_pid, _amount) {
         let from = Blockchain.transaction.from
         let pool = this.poolContract.call('deposit', from, _pid, _amount)

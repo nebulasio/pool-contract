@@ -104,13 +104,14 @@ class PoolProxy extends BaseContract {
         })
     }
 
-    // 管理员提款
-    transferFund(token, toAddr, amount) {
+    withdrawFund(token, toAddr, amount) {
+        this._verifyFromAssetManager()
+
         if (!toAddr) {
             toAddr = Blockchain.transaction.from
         }
-        this._verifyFromAssetManager()
-        if (token.toLocaleUpperCase() === "NAS") {
+        if (Utils.isNull(token) || token == '' || token.toLocaleUpperCase() === "NAS") {
+            token = 'NAS'
             Utils.transferNAS(toAddr, amount)
         } else {
             this._verifyAddress(token)
@@ -118,7 +119,7 @@ class PoolProxy extends BaseContract {
             tokenContract.call('transfer', toAddr, amount)
         }
         this.poolContract.call('updatePoolBalance')
-        Event.Trigger("PoolProxy: transferFund", {
+        Event.Trigger("PoolProxy: withdrawFund", {
             Transfer: {
                 from: Blockchain.transaction.to,
                 to: toAddr,
@@ -142,8 +143,10 @@ class PoolProxy extends BaseContract {
 
     deposit(_pid, _amount) {
         let from = Blockchain.transaction.from
-        let pool = this.poolContract.call('deposit', from, _pid, _amount)
-        new Blockchain.Contract(pool.lpToken).call('transferFrom', from, Blockchain.transaction.to, _amount)
+        let data = this.poolContract.call('deposit', from, _pid, _amount)
+        this._transferReward(data.reward)
+
+        new Blockchain.Contract(data.lpToken).call('transferFrom', from, Blockchain.transaction.to, _amount)
         this._depositEvent(true, from, _pid, _amount)
     }
 
@@ -163,13 +166,10 @@ class PoolProxy extends BaseContract {
         let reward = this.poolContract.call('claim', from, _pid)
         this._transferReward(reward)
 
-        this.poolContract.call('updatePoolBalance')
-
         Event.Trigger('Pool', {Stateus: true, Claim: {from: from, poolId: _pid}})
     }
 
     _transferReward(reward) {
-        console.log('transfer reward:', reward)
         if (new BigNumber(reward).gt(0)) {
             Utils.transferNAS(Blockchain.transaction.from, reward)
         }

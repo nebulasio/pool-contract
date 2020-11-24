@@ -8,7 +8,6 @@ const Event = neblocal.Event
 /** Local simulation environment code; End. */
 
 const AccumulatedMultiple = new BigNumber(10).pow(12).toString(10)
-const USDTDecimals = 6
 
 class PageData {
 
@@ -374,7 +373,9 @@ class Pool extends BaseContract {
             lpToken: _lpToken,
             allocPoint: _allocPoint,
             lastRewardBlock: lastRewardBlock,
-            accPerShare: '0'
+            rewardPerBlock: '0',
+            accPerShare: '0',
+            totalReward: '0'
         })
     }
 
@@ -410,7 +411,7 @@ class Pool extends BaseContract {
         if (!user) {
             return '0'
         }
-        let lpSupply = this._balanceOf(pool.lpToken, Blockchain.transaction.to)
+        let lpSupply = this._balanceOf(pool.lpToken, this.config.poolProxy)
 
         let height = Blockchain.block.height
         if (height > pool.lastRewardBlock && new BigNumber(lpSupply).gt(0)) {
@@ -418,7 +419,7 @@ class Pool extends BaseContract {
 
             let balance = this._totalBalance || '0'
             let pendingToken = new BigNumber(state.balance).sub(balance)
-            let reward = pendingToken.times(pool.allocPoint).div(this._totalAllocPoint).toFixed(0, BigNumber.ROUND_DOWN)
+            let reward = pendingToken.times(pool.allocPoint).div(this._totalAllocPoint)
             accPerShare =  new BigNumber(accPerShare).add(reward.times(AccumulatedMultiple).div(lpSupply));
         }
         return new BigNumber(user.amount).times(accPerShare).div(AccumulatedMultiple).sub(user.rewardDebt).toFixed(0, BigNumber.ROUND_DOWN)
@@ -432,15 +433,18 @@ class Pool extends BaseContract {
             // rewad nas value
             let state = Blockchain.getAccountState(this.config.poolProxy)
             let reward = new BigNumber(state.balance).sub(this._totalBalance)
+            let duration = Blockchain.block.height - pool.lastRewardBlock
+            if (reward.lte(0) || duration <= 0) {
+                reward = new BigNumber(pool.rewardPerBlock)
+                duration = 1
+            }
             let nasPrice = this._getPrice(this.config.wnas)
             reward = reward.times(nasPrice).div(new BigNumber(10).pow(18))
-
-            let duration = Blockchain.block.height - pool.lastRewardBlock
-            let apy = new BigNumber(reward).times(365*24*60*60).div(duration*15).div(poolValue)
-            return apy.toFixed(0, BigNumber.ROUND_DOWN)
+            let apy = reward.times(365*24*60*60).div(duration*15).div(poolValue)
+            return {total: poolValue, apy: apy.times(1000000).toFixed(0, BigNumber.ROUND_DOWN)}
         }
 
-        return '0'
+        return {total: '0', apy: '0'}
     }
 
     getPoolValue(_pid) {
@@ -456,8 +460,9 @@ class Pool extends BaseContract {
             let token0Price = this._getPrice(pair.token0)
             let token1Price = this._getPrice(pair.token1)
 
-            let poolValue = new BigNumber(token0Price).times(pair.reserve0).div(token0Decimals)
-            poolValue = new BigNumber(token1Price).times(pair.reserve1).div(token1Decimals).add(poolValue)
+            let poolValue = new BigNumber(token0Price).times(pair.reserve0).div(new BigNumber(10).pow(token0Decimals))
+            poolValue = new BigNumber(token1Price).times(pair.reserve1).div(new BigNumber(10).pow(token1Decimals)).add(poolValue)
+            poolValue = poolValue.times(lpBalance).div(totalSupply)
             return poolValue.toFixed(0, BigNumber.ROUND_DOWN)
         } else {
             return '0'
@@ -472,7 +477,7 @@ class Pool extends BaseContract {
             let pairs = {}
             for (let pairName of allPairs) {
                 let names = pairName.split('/')
-                pair = new Blockchain.Contract(this.config.swap).call('getPair', names[0], names[1])
+                let pair = new Blockchain.Contract(this.config.swap).call('getPair', names[0], names[1])
                 pairs[pairName] = pair
             }
             this._pairCaches = pairs
@@ -483,7 +488,7 @@ class Pool extends BaseContract {
                 return pair
             }
         }
-        return null
+        throw new Error('swap pair not found.')
     }
 
     // price * 10^6
@@ -491,7 +496,7 @@ class Pool extends BaseContract {
         if (token == this.config.usdt) {
             return '1000000'
         }
-        if (this._priceCache[token]) {
+        if (this._priceCache && this._priceCache[token]) {
             return this._priceCache[token]
         }
         let pair = null
@@ -502,16 +507,15 @@ class Pool extends BaseContract {
             pair = new Blockchain.Contract(this.config.swap).call('getPair', token, this.config.usdt)
         }
         let decimals = new Blockchain.Contract(token).call('decimals')
-        let usdtWei = new BigNumber(10).pow(USDTDecimals)
         let tokenWei = new BigNumber(10).pow(decimals)
         
         if (!this._priceCache) {
             this._priceCache = {}
         }
         if (token == pair.token0) {
-            this._priceCache[token] = usdtWei.times(usdtWei).times(pair.reserve0).div(pair.reserve1).div(tokenWei).toFixed(0, BigNumber.ROUND_DOWN)
+            this._priceCache[token] = new BigNumber(pair.reserve1).times(tokenWei).div(pair.reserve0).toFixed(0, BigNumber.ROUND_DOWN)
         } else {
-            this._priceCache[token] = usdtWei.times(usdtWei).times(pair.reserve1).div(pair.reserve0).div(tokenWei).toFixed(0, BigNumber.ROUND_DOWN)
+            this._priceCache[token] = new BigNumber(pair.reserve0).times(tokenWei).div(pair.reserve1).toFixed(0, BigNumber.ROUND_DOWN)
         }
         return this._priceCache[token]
     }
@@ -543,7 +547,11 @@ class Pool extends BaseContract {
         }
         let lpSupply = this._balanceOf(pool.lpToken, this.config.poolProxy)
         if (new BigNumber(lpSupply).gt(0) && new BigNumber(_pendingToken).gt(0)) {
-            let reward = new BigNumber(_pendingToken).times(pool.allocPoint).div(this._totalAllocPoint).toFixed(0, BigNumber.ROUND_DOWN)
+            let reward = new BigNumber(_pendingToken).times(pool.allocPoint).div(this._totalAllocPoint)
+            pool.totalReward = new BigNumber(pool.totalReward).add(reward).toFixed(0, BigNumber.ROUND_DOWN)
+            if (Blockchain.block.height > pool.lastRewardBlock) {
+                pool.rewardPerBlock = new BigNumber(reward).div(Blockchain.block.height - pool.lastRewardBlock).toFixed(0, BigNumber.ROUND_DOWN)
+            }
             pool.accPerShare = new BigNumber(pool.accPerShare).add(new BigNumber(reward).times(AccumulatedMultiple).div(lpSupply)).toFixed(0, BigNumber.ROUND_DOWN)
         }
         pool.lastRewardBlock = Blockchain.block.height
@@ -557,13 +565,16 @@ class Pool extends BaseContract {
         this.massUpdatePools()
 
         let pool = this._verifyPool(_pid)
-        let from = _from
-        let ukey = this._poolUserKey(_pid, from)
-        let user = this._userInfo.getData(ukey) || { amount: '0'}
+        let ukey = this._poolUserKey(_pid, _from)
+        let user = this._userInfo.getData(ukey) || {rewardDebt: '0', amount: '0'}
+        let reward = '0'
+        if (new BigNumber(user.amount).gt(0)) {
+            reward = this._handleReward(pool, user)
+        }
         user.amount = new BigNumber(user.amount).add(_amount).toFixed(0, BigNumber.ROUND_DOWN)
         user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).div(AccumulatedMultiple).toFixed(0, BigNumber.ROUND_DOWN)
         this._userInfo.setData(ukey, user)
-        return pool
+        return {lpToken: pool.lpToken, reward: reward}
     }
 
     claim(_from, _pid) {
@@ -607,7 +618,7 @@ class Pool extends BaseContract {
 
         let reward = this._handleReward(pool, user)
 
-        user.amount = new BigNumber(user.amount).sub(_amount)
+        user.amount = new BigNumber(user.amount).sub(_amount).toFixed(0, BigNumber.ROUND_DOWN)
         user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).toFixed(0, BigNumber.ROUND_DOWN)
         this._userInfo.setData(ukey, user)
 
@@ -619,7 +630,9 @@ class Pool extends BaseContract {
     }
 
     getPool(_pid) {
-        return this._verifyPool(_pid)
+        let pool = this._verifyPool(_pid)
+        pool.value = this.getAPY(_pid)
+        return pool
     }
 
     getUserInfo(_user) {

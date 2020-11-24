@@ -23,9 +23,14 @@ class Utils {
     static nax(value) {
         return Utils.naxUnit.times(value).toString(10)
     }
+
+    static usdt(value) {
+        return Utils.usdtUnit.times(value).toString(10)
+    }
 }
 
 Utils.nasUnit = new BigNumber(10).pow(18)
 Utils.naxUnit = new BigNumber(10).pow(9)
+Utils.usdtUnit = new BigNumber(10).pow(6)
 
 module.exports = Utils

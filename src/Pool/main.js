@@ -619,7 +619,7 @@ class Pool extends BaseContract {
         let reward = this._handleReward(pool, user)
 
         user.amount = new BigNumber(user.amount).sub(_amount).toFixed(0, BigNumber.ROUND_DOWN)
-        user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).toFixed(0, BigNumber.ROUND_DOWN)
+        user.rewardDebt = new BigNumber(user.amount).times(pool.accPerShare).div(AccumulatedMultiple).toFixed(0, BigNumber.ROUND_DOWN)
         this._userInfo.setData(ukey, user)
 
         return {lpToken: pool.lpToken, reward: reward}
